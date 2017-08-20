@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"math/rand"
 	"math"
+	"time"
+	"sync"
 )
 
 type Pixel struct {
 	R uint8
 	G uint8
 	B uint8
+	Ignore bool
 }
 
 type Sender struct {
@@ -23,11 +26,13 @@ type Sender struct {
 	x_start      int
 	y_start      int
 	concurrency  int
+	ignore_black bool
 	started      bool
+	lock         *sync.Mutex
 }
 
-func CreateSender(x_start int, y_start int, concurrency int) (*Sender) {
-	return &Sender{[]net.Conn{}, nil, nil, 0, 0, x_start, y_start, concurrency, false}
+func CreateSender(x_start int, y_start int, concurrency int, ignore_black bool) (*Sender) {
+	return &Sender{[]net.Conn{}, nil, nil, 0, 0, x_start, y_start, concurrency, ignore_black, false, &sync.Mutex{}}
 }
 
 func (sender *Sender) SetImage(image image2.Image) {
@@ -44,10 +49,15 @@ func (sender *Sender) SetImage(image image2.Image) {
 	for x := 0; x < size.X; x++ {
 		for y := 0; y < size.Y; y++ {
 			R, G, B := sender.getNormalisedRgbaAt(x, y)
+
 			pixel := &pixels[x][y]
 			pixel.R = R
 			pixel.G = G
 			pixel.B = B
+
+			if R == 0 && G == 0 && B == 0 {
+				pixel.Ignore = true
+			}
 		}
 	}
 
@@ -62,20 +72,26 @@ func (sender *Sender) Start(worker_type string) {
 	sender.started = true
 
 	for i := 0; i < sender.concurrency; i ++ {
-		conn, err := net.Dial("tcp", "145.116.223.67:1234")
+		go func() {
+			conn, err := net.DialTimeout("tcp", "steigerflood.campzone.lan:1234", 1*time.Second)
 
-		if err != nil {
-			fmt.Printf("Error setting up TCP connection: %s\r\n", err.Error())
-			continue
-		}
+			if err != nil {
+				fmt.Printf("Error setting up TCP connection: %s\r\n", err.Error())
+				return
+			}
 
-		sender.conn = append(sender.conn, conn)
-		switch worker_type {
-		case "random":
-			go sender.launchRandomWorker(i)
-		case "squares":
-			go sender.launchSquaresWorker(i)
-		}
+			sender.lock.Lock()
+			sender.conn = append(sender.conn, conn)
+			index := len(sender.conn) - 1
+			sender.lock.Unlock()
+
+			switch worker_type {
+			case "random":
+				go sender.launchRandomWorker(index)
+			case "squares":
+				go sender.launchSquaresWorker(index)
+			}
+		}()
 	}
 }
 
@@ -100,15 +116,22 @@ func (sender *Sender) launchSquaresWorker(index int) {
 		worker_column := index % (screen_dim_cells)
 		worker_row := int(math.Floor(float64(index) / float64(screen_dim_cells)))
 
-		square_x_size := sender.image_x / screen_dim_cells
-		square_y_size := sender.image_y / screen_dim_cells
+		square_x_size := int(math.Ceil(float64(sender.image_x / screen_dim_cells)))
+		square_y_size := int(math.Ceil(float64(sender.image_y / screen_dim_cells)))
 
 		for y := 0; y < square_y_size; y++ {
 			for x := 0; x < square_x_size; x++ {
-				if !sender.started { break }
+				if !sender.started {
+					break
+				}
 
 				x_position, y_position := (x + (worker_column * square_x_size)), (y + (worker_row * square_y_size))
 				pixel := sender.pixels[x_position][y_position]
+
+				if pixel.Ignore {
+					continue
+				}
+
 				screen_x, screen_y := sender.x_start+x_position, sender.y_start+y_position
 				sender.conn[index].Write([]byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", screen_x, screen_y, pixel.R, pixel.G, pixel.B)))
 			}
