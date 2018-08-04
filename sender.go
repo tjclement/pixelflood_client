@@ -18,7 +18,7 @@ type Pixel struct {
 }
 
 type Sender struct {
-	conn         []net.Conn
+	conn         []net.UDPConn
 	currentImage image2.Image
 	pixels       [][]Pixel
 	image_x      int
@@ -41,6 +41,7 @@ func (sender *Sender) SetImage(image image2.Image) {
 	sender.image_x = size.X
 	sender.image_y = size.Y
 
+	fmt.Println("Size", size.X, size.Y)
 	pixels := make([][]Pixel, size.X)
 	for column := 0; column < size.Y; column++ {
 		pixels[column] = make([]Pixel, size.Y)
@@ -73,7 +74,10 @@ func (sender *Sender) Start(worker_type string) {
 
 	for i := 0; i < sender.concurrency; i ++ {
 		go func() {
-			conn, err := net.DialTimeout("tcp", "steigerflood.campzone.lan:1234", 1*time.Second)
+			//conn, err := net.DialTimeout("tcp", "steigerflood.campzone.lan:1234", 1*time.Second)
+
+			udpAddr, _ := net.ResolveUDPAddr("udp", "steigerflood.campzone.lan:1235")
+			conn, err := net.DialUDP("udp", nil, udpAddr)
 
 			if err != nil {
 				fmt.Printf("Error setting up TCP connection: %s\r\n", err.Error())
@@ -81,7 +85,7 @@ func (sender *Sender) Start(worker_type string) {
 			}
 
 			sender.lock.Lock()
-			sender.conn = append(sender.conn, conn)
+			sender.conn = append(sender.conn, *conn)
 			index := len(sender.conn) - 1
 			sender.lock.Unlock()
 
@@ -133,7 +137,8 @@ func (sender *Sender) launchSquaresWorker(index int) {
 				}
 
 				screen_x, screen_y := sender.x_start+x_position, sender.y_start+y_position
-				sender.conn[index].Write([]byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", screen_x, screen_y, pixel.R, pixel.G, pixel.B)))
+				//sender.conn[index].Write([]byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", screen_x, screen_y, pixel.R, pixel.G, pixel.B)))
+				sender.conn[index].Write([]byte{uint8(screen_x >> 8), uint8(screen_x & 0x00FF), uint8(screen_y >> 8), uint8(screen_y & 0x00FF), pixel.R, pixel.G, pixel.B})
 			}
 		}
 	}
