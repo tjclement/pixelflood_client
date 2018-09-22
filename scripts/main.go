@@ -18,13 +18,14 @@ import (
 )
 
 func main() {
+	address := flag.String("address", "pixelflood.event.campzone.nl:1234", "The IP/domain and port of the PixelFlood server")
 	image_file := flag.String("image", "./image.jpg", "X value of the screen to begin drawing on")
 	x_start := flag.Int("x_start", 0, "X value of the screen to begin drawing on")
 	y_start := flag.Int("y_start", 0, "y value of the screen to begin drawing on")
-	x_size := flag.Int("x_size", 320, "X size of the image we want to draw on the screen")
+	x_size := flag.Int("x_size", 200, "X size of the image we want to draw on the screen")
 	y_size := flag.Int("y_size", 200, "Y size of the image we want to draw on the screen")
 	worker_amount := flag.Int("worker_amount", 16, "The amount of workers that concurrently sends pixel values to the server")
-	worker_type := flag.String("worker_type", "random", "The type of pixel replacement strategy ['random', 'squares']")
+	worker_type := flag.String("worker_type", "squares", "The type of pixel replacement strategy ['random', 'squares']")
 	screen := flag.String("screen", "", "The screen to target ['topleft', 'center', 'topright', 'externalright']. Replaces manual x,y start and size.")
 	ignore_black := flag.Bool("ignore_black", false, "Set to true to skip sending RGB(0, 0, 0) pixels. This allows for partially transparent images on the screen.")
 	flag.Parse()
@@ -56,7 +57,7 @@ func main() {
 
 	sender := pixelflood_client.CreateSender(*x_start, *y_start, *worker_amount, *ignore_black)
 	sender.SetImage(imageFrames[0])
-	sender.Start(*worker_type)
+	sender.Start(*worker_type, *address)
 
 	go loopThroughFrames(imageFrames, delays, sender)
 
