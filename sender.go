@@ -1,23 +1,24 @@
 package pixelflood_client
 
 import (
-	image2 "image"
-	"net"
 	"fmt"
-	"math/rand"
+	image2 "image"
 	"math"
-	"time"
+	"math/rand"
+	"net"
 	"sync"
+	"time"
 )
 
 type Pixel struct {
-	R uint8
-	G uint8
-	B uint8
+	R      uint8
+	G      uint8
+	B      uint8
 	Ignore bool
 }
 
 type Sender struct {
+	Tick         uint64
 	conn         []net.Conn
 	currentImage image2.Image
 	pixels       [][]Pixel
@@ -32,7 +33,7 @@ type Sender struct {
 }
 
 func CreateSender(x_start int, y_start int, concurrency int, ignore_black bool) (*Sender) {
-	return &Sender{[]net.Conn{}, nil, nil, 0, 0, x_start, y_start, concurrency, ignore_black, false, &sync.Mutex{}}
+	return &Sender{0, []net.Conn{}, nil, nil, 0, 0, x_start, y_start, concurrency, ignore_black, false, &sync.Mutex{}}
 }
 
 func (sender *Sender) SetImage(image image2.Image) {
@@ -96,45 +97,100 @@ func (sender *Sender) Start(worker_type string, address string) {
 }
 
 func (sender *Sender) launchRandomWorker(index int) {
-	for sender.started {
-		random_x, random_y := rand.Intn(sender.image_x), rand.Intn(sender.image_y)
-		pixel := sender.pixels[random_x][random_y]
-		R, G, B := pixel.R, pixel.G, pixel.B
-		screen_x, screen_y := sender.x_start+random_x, sender.y_start+random_y
+	payloads := make([][]byte, sender.image_x*sender.image_y)
+	active_payloads := 0
+	curTick := uint64(0)
 
-		sender.conn[index].Write([]byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", screen_x, screen_y, R, G, B)))
+	for y := 0; y < sender.image_x; y++ {
+		for x := 0; x < sender.image_y; x++ {
+			pixel := sender.pixels[x][y]
+			if pixel.Ignore {
+				continue
+			}
+			R, G, B := pixel.R, pixel.G, pixel.B
+			payloads[active_payloads] = []byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", x+sender.x_start, y+sender.y_start, R, G, B))
+			active_payloads++
+		}
+	}
+
+	for sender.started {
+		if sender.Tick > curTick {
+			active_payloads = 0
+			for y := 0; y < sender.image_x; y++ {
+				for x := 0; x < sender.image_y; x++ {
+					pixel := sender.pixels[x][y]
+					if pixel.Ignore {
+						continue
+					}
+					R, G, B := pixel.R, pixel.G, pixel.B
+					payloads[active_payloads] = []byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", x+sender.x_start, y+sender.y_start, R, G, B))
+					active_payloads++
+				}
+			}
+
+			curTick++
+		}
+
+		random_i := rand.Intn(active_payloads)
+		sender.conn[index].Write(payloads[random_i])
 	}
 }
 
 // Divides the screen into multiple equally sized squares (2x2, 3x3, 4x4, etc), and renders the square
 // of a given index as a separate worker. Sender.concurrency must be a number that has an integer square root.
 func (sender *Sender) launchSquaresWorker(index int) {
-	for sender.started {
-		// The amount of cells in a single row or column
-		screen_dim_cells := int(math.Sqrt(float64(sender.concurrency)))
 
-		worker_column := index % (screen_dim_cells)
-		worker_row := int(math.Floor(float64(index) / float64(screen_dim_cells)))
+	// The amount of cells in a single row or column
+	screen_dim_cells := int(math.Sqrt(float64(sender.concurrency)))
 
-		square_x_size := int(math.Ceil(float64(sender.image_x / screen_dim_cells)))
-		square_y_size := int(math.Ceil(float64(sender.image_y / screen_dim_cells)))
+	worker_column := index % (screen_dim_cells)
+	worker_row := int(math.Floor(float64(index) / float64(screen_dim_cells)))
 
-		for y := 0; y < square_y_size; y++ {
-			for x := 0; x < square_x_size; x++ {
-				if !sender.started {
-					break
-				}
+	square_x_size := int(math.Ceil(float64(sender.image_x / screen_dim_cells)))
+	square_y_size := int(math.Ceil(float64(sender.image_y / screen_dim_cells)))
 
-				x_position, y_position := (x + (worker_column * square_x_size)), (y + (worker_row * square_y_size))
-				pixel := sender.pixels[x_position][y_position]
+	payloads := make([][]byte, square_x_size*square_y_size)
+	active_payloads := 0
+	curTick := uint64(0)
 
-				if pixel.Ignore {
-					continue
-				}
-
-				screen_x, screen_y := sender.x_start+x_position, sender.y_start+y_position
-				sender.conn[index].Write([]byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", screen_x, screen_y, pixel.R, pixel.G, pixel.B)))
+	for y := 0; y < square_y_size; y++ {
+		for x := 0; x < square_x_size; x++ {
+			abs_x, abs_y := (x + (worker_column * square_x_size)), (y + (worker_row * square_y_size))
+			pixel := sender.pixels[abs_x][abs_y]
+			if pixel.Ignore {
+				continue
 			}
+			R, G, B := pixel.R, pixel.G, pixel.B
+			payloads[active_payloads] = []byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", x+sender.x_start, y+sender.y_start, R, G, B))
+			active_payloads++
+		}
+	}
+
+	for sender.started {
+		if curTick < sender.Tick {
+			active_payloads = 0
+			for y := 0; y < square_y_size; y++ {
+				for x := 0; x < square_x_size; x++ {
+					abs_x, abs_y := (x + (worker_column * square_x_size)), (y + (worker_row * square_y_size))
+					pixel := sender.pixels[abs_x][abs_y]
+					if pixel.Ignore {
+						continue
+					}
+					R, G, B := pixel.R, pixel.G, pixel.B
+					payloads[active_payloads] = []byte(fmt.Sprintf("PX %d %d %02x%02x%02x\n", x+sender.x_start, y+sender.y_start, R, G, B))
+					active_payloads++
+				}
+			}
+
+			curTick++
+		}
+
+		for i := 0; i < active_payloads; i++ {
+			if !sender.started {
+				break
+			}
+
+			sender.conn[index].Write(payloads[i])
 		}
 	}
 }

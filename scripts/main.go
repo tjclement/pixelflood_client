@@ -102,6 +102,7 @@ func loopThroughFrames(frames []image.Image, delays []int, sender *pixelflood_cl
 		for index, frame := range frames {
 			delay := delays[index]
 			sender.SetImage(frame)
+			sender.Tick++
 			time.Sleep(time.Duration(delay) * 10 * time.Millisecond)
 		}
 	}
